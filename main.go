@@ -316,14 +316,18 @@ func print_one(args []any) {
 }
 
 var vars = map[string]VarInfo{
-	"x":             VarInfo{Name: "x", Type: "int", mem_offset: 0},
-	"y":             VarInfo{Name: "y", Type: "int", mem_offset: 1},
-	"print_all":     VarInfo{Name: "print_all", Type: "builtin-function", mem_offset: 2},
-	"print_one":     VarInfo{Name: "print_one", Type: "builtin-function", mem_offset: 3},
-	"done":          VarInfo{Name: "done", Type: "builtin-function", mem_offset: 4},
-	"Person":        VarInfo{Name: "Person", Type: "class", mem_offset: 5},
-	"person":        VarInfo{Name: "person", Type: "Person", mem_offset: 6},
-	"person::field": VarInfo{Name: "person", Type: "Person", mem_offset: 7},
+	"x":                              VarInfo{Name: "x", Type: "int", mem_offset: 0},
+	"y":                              VarInfo{Name: "y", Type: "int", mem_offset: 1},
+	"print_all":                      VarInfo{Name: "print_all", Type: "builtin-function", mem_offset: 2},
+	"print_one":                      VarInfo{Name: "print_one", Type: "builtin-function", mem_offset: 3},
+	"done":                           VarInfo{Name: "done", Type: "builtin-function", mem_offset: 4},
+	"Address":                        VarInfo{Name: "Address", Type: "class", mem_offset: 5},
+	"person":                         VarInfo{Name: "person", Type: "Person", mem_offset: 6},
+	"person::field::age":             VarInfo{Name: "person", Type: "Person", mem_offset: 7},
+	"person::field::bench":           VarInfo{Name: "person", Type: "Person", mem_offset: 8},
+	"person::field::address":         VarInfo{Name: "person", Type: "Person", mem_offset: 9},
+	"person::field::address::number": VarInfo{Name: "person", Type: "Person", mem_offset: 10},
+	"Person":                         VarInfo{Name: "Person", Type: "class", mem_offset: 11},
 }
 
 type StackFrame struct {
@@ -354,6 +358,7 @@ func build_program() {
 	source := `
 				print_added(person.age) 
 				print_added(person.highest_bench) 
+				print_one(person.address.number) 
 				print_added(3) 
 				print_added(4) 
 				print_added(5) 
@@ -396,9 +401,16 @@ func build_program() {
 	memory[vars["Person"].mem_offset] = Class{Name: "Person", fieldsInfo: map[string]VarInfo{
 		"age":           VarInfo{Name: "age", Type: "int", mem_offset: 0},
 		"highest_bench": VarInfo{Name: "age", Type: "int", mem_offset: 1},
+		"address":       VarInfo{Name: "address", Type: "Address", mem_offset: 2},
+	}}
+	memory[vars["Address"].mem_offset] = Class{Name: "Address", fieldsInfo: map[string]VarInfo{
+		"street": VarInfo{Name: "street", Type: "int", mem_offset: 0},
+		"number": VarInfo{Name: "number", Type: "int", mem_offset: 1},
 	}}
 	memory[vars["person"].mem_offset] = 22
 	memory[vars["person"].mem_offset+1] = 150
+	memory[vars["person"].mem_offset+2] = 2
+	memory[vars["person"].mem_offset+3] = 426
 	function_header := Function{Name: "print_added", param_types: []string{"int"}, return_type: "void", instruction_start_index: len(bytecode), local_vars: map[string]VarInfo{
 		"num": VarInfo{Name: "num", Type: "int", mem_offset: 0},
 	}}
@@ -489,7 +501,7 @@ func main() {
 			type_ := vars[name].Type
 			// fmt.Println(name, "is name")
 			mem_offset := vars[name].mem_offset
-			if bytecode[instruction_ptr+1].Opcode == FieldAccess {
+			for bytecode[instruction_ptr+1].Opcode == FieldAccess {
 				instruction_ptr++
 				c := memory[vars[type_].mem_offset].(Class)
 				field_info := c.fieldsInfo[bytecode[instruction_ptr].Operands[0].(string)]
