@@ -12,6 +12,9 @@ type Opcode int
 
 const (
 	OPCODE_ADD Opcode = iota
+	Invoke_function_on_stack_top
+	LoadLocal
+
 	OPCODE_SUB
 	OPCODE_MUL
 	OPCODE_DIV
@@ -24,11 +27,10 @@ const (
 	Assign
 	StackTopType
 	Blank
-	Invoke_function_on_stack_top
 	Return
-	LoadLocal
 	JumpIfZero
 	SetLocal
+	FieldAccess
 )
 
 type VarInfo struct {
@@ -79,6 +81,8 @@ func (this Instruction) String() string {
 		res += "GT"
 	case OPCODE_LT:
 		res += "LT"
+	case FieldAccess:
+		res += "FIELD_ACCESS"
 
 	default:
 		panic(fmt.Sprintf("Unknown opcode: %d", this.Opcode))
@@ -105,18 +109,19 @@ func (p *Parser) cur_token() tokenizer.Token {
 
 func (p *Parser) parse_wrapped_term() []Instruction {
 	exp_byte_code := p.parse_term()
-	was_ident := exp_byte_code[len(exp_byte_code)-1].Opcode != StackTopType
+	was_ident := exp_byte_code.Opcode != Push
 	if !was_ident {
-		return exp_byte_code
+		return []Instruction{exp_byte_code}
 	}
 	// fmt.Print(p.cur_token().Value, "p.tokens[p.index].Value")
+	instructions := []Instruction{exp_byte_code}
 	for p.in_range() {
 		state_changed := false
 		if p.tokens[p.index].Value == "(" {
 			p.index++
 			arg_count := 0
 			for p.in_range() && p.cur_token().Value != ")" {
-				exp_byte_code = append(exp_byte_code, p.parse_expression()...)
+				instructions = append(instructions, p.parse_expression()...)
 				arg_count++
 				if p.cur_token().Value == "," {
 					p.index++
@@ -125,14 +130,20 @@ func (p *Parser) parse_wrapped_term() []Instruction {
 				}
 			}
 			p.expect_token(")")
-			exp_byte_code = append(exp_byte_code, Instruction{Opcode: Invoke_function_on_stack_top, Operands: []any{arg_count}})
+			instructions = append(instructions, Instruction{Opcode: Invoke_function_on_stack_top, Operands: []any{arg_count}})
+			state_changed = true
+		}
+		if p.tokens[p.index].Value == "." {
+			p.index++
+			instructions = append(instructions, Instruction{Opcode: FieldAccess, Operands: []any{p.tokens[p.index].Value}})
+			p.index++
 			state_changed = true
 		}
 		if !state_changed {
 			break
 		}
 	}
-	return exp_byte_code
+	return instructions
 }
 
 func (p *Parser) expect_token(token_value string) {
@@ -140,25 +151,46 @@ func (p *Parser) expect_token(token_value string) {
 		panic(fmt.Sprintf("Expected token %s, got %s", token_value, p.NextToken().Value))
 	}
 }
-func (p *Parser) parse_term() []Instruction {
+
+func (Instruction) InstructionOrAstNode__() {}
+
+/////ast
+
+func (astVarRef) InstructionOrAstNode__()    {}
+func (astFieldAccess) InstructionOrAstNode() {}
+
+type astVarRef struct {
+	name string
+}
+type astFieldAccess struct {
+	name string
+}
+
+type InstructionOrAstNode interface {
+	InstructionOrAstNode__()
+}
+
+/////ast
+
+func (p *Parser) parse_term() Instruction {
 	t := p.NextToken()
 	switch t.Type {
 	case tokenizer.TOKEN_NUMBER:
 		n, _ := strconv.Atoi(t.Value)
-		return []Instruction{Instruction{Opcode: Push, Operands: []any{n}}} // Instruction{Opcode: StackTopType, Operands: []any{"int"}}
+		return Instruction{Opcode: Push, Operands: []any{TypeSafeValue{Type: "int", Data: n}}} // Instruction{Opcode: StackTopType, Operands: []any{"int"}}
 
 	case tokenizer.TOKEN_STRING:
-		return []Instruction{Instruction{Opcode: Push, Operands: []any{t.Value}}} //  Instruction{Opcode: StackTopType, Operands: []any{"string"}}
+		return Instruction{Opcode: Push, Operands: []any{TypeSafeValue{Type: "string", Data: t.Value}}} //  Instruction{Opcode: StackTopType, Operands: []any{"string"}}
 
 	case tokenizer.TOKEN_IDENTIFIER:
 		if in_function {
 			if v, ok := current_parsing_function.local_vars[t.Value]; ok {
-				return []Instruction{Instruction{Opcode: LoadLocal, Operands: []any{
+				return Instruction{Opcode: LoadLocal, Operands: []any{
 					v.mem_offset, v.Type,
-				}}}
+				}}
 			}
 		}
-		return []Instruction{Instruction{Opcode: LoadVar, Operands: []any{t.Value}}}
+		return Instruction{Opcode: LoadVar, Operands: []any{t.Value}}
 	default:
 		panic("Unexpected token: " + t.String())
 	}
@@ -230,7 +262,7 @@ func (p *Parser) parse_statement(previous_instruction_amount int) []Instruction 
 			instructions = append(instructions, p.parse_statement(previous_instruction_amount+len(instructions))...)
 		}
 		p.expect_token("}")
-		instructions = append(instructions, Instruction{Opcode: Push, Operands: []any{0}})
+		instructions = append(instructions, Instruction{Opcode: Push, Operands: []any{TypeSafeValue{Type: "int", Data: 0}}})
 		instructions = append(instructions, Instruction{Opcode: JumpIfZero, Operands: []any{previous_instruction_amount + start_index}})
 		assert.Assert(instructions[conditional_jump_instruction_index].Opcode == JumpIfZero)
 		instructions[conditional_jump_instruction_index] = Instruction{Opcode: JumpIfZero, Operands: []any{previous_instruction_amount + len(instructions)}}
@@ -284,11 +316,14 @@ func print_one(args []any) {
 }
 
 var vars = map[string]VarInfo{
-	"x":         VarInfo{Name: "x", Type: "int", mem_offset: 0},
-	"y":         VarInfo{Name: "y", Type: "int", mem_offset: 1},
-	"print_all": VarInfo{Name: "print_all", Type: "builtin-function", mem_offset: 2},
-	"print_one": VarInfo{Name: "print_one", Type: "builtin-function", mem_offset: 3},
-	"done":      VarInfo{Name: "done", Type: "builtin-function", mem_offset: 4},
+	"x":             VarInfo{Name: "x", Type: "int", mem_offset: 0},
+	"y":             VarInfo{Name: "y", Type: "int", mem_offset: 1},
+	"print_all":     VarInfo{Name: "print_all", Type: "builtin-function", mem_offset: 2},
+	"print_one":     VarInfo{Name: "print_one", Type: "builtin-function", mem_offset: 3},
+	"done":          VarInfo{Name: "done", Type: "builtin-function", mem_offset: 4},
+	"Person":        VarInfo{Name: "Person", Type: "class", mem_offset: 5},
+	"person":        VarInfo{Name: "person", Type: "Person", mem_offset: 6},
+	"person::field": VarInfo{Name: "person", Type: "Person", mem_offset: 7},
 }
 
 type StackFrame struct {
@@ -303,6 +338,11 @@ type Function struct {
 	local_vars              map[string]VarInfo
 }
 
+type Class struct {
+	Name       string
+	fieldsInfo map[string]VarInfo
+}
+
 var memory = make([]any, 100)
 var bytecode []Instruction
 
@@ -312,7 +352,8 @@ var in_function = false
 func build_program() {
 
 	source := `
-				print_added(2) 
+				print_added(person.age) 
+				print_added(person.highest_bench) 
 				print_added(3) 
 				print_added(4) 
 				print_added(5) 
@@ -352,6 +393,12 @@ func build_program() {
 		fmt.Println("done the program")
 		os.Exit(0)
 	}
+	memory[vars["Person"].mem_offset] = Class{Name: "Person", fieldsInfo: map[string]VarInfo{
+		"age":           VarInfo{Name: "age", Type: "int", mem_offset: 0},
+		"highest_bench": VarInfo{Name: "age", Type: "int", mem_offset: 1},
+	}}
+	memory[vars["person"].mem_offset] = 22
+	memory[vars["person"].mem_offset+1] = 150
 	function_header := Function{Name: "print_added", param_types: []string{"int"}, return_type: "void", instruction_start_index: len(bytecode), local_vars: map[string]VarInfo{
 		"num": VarInfo{Name: "num", Type: "int", mem_offset: 0},
 	}}
@@ -383,12 +430,12 @@ func makeFunction(function_header Function, function_name string, block_code str
 	in_function = false
 }
 
-type DataAndHeader struct {
+type TypeSafeValue struct {
 	Type string
 	Data any
 }
 
-var stack = make([]DataAndHeader, 0)
+var stack = make([]TypeSafeValue, 0)
 var frames = make([]StackFrame, 0)
 
 func block_instructions(source string, previous_instruction_amount int) []Instruction {
@@ -439,9 +486,17 @@ func main() {
 		switch instruction.Opcode {
 		case LoadVar:
 			name := instruction.Operands[0].(string)
+			type_ := vars[name].Type
 			// fmt.Println(name, "is name")
-			data := memory[vars[name].mem_offset]
-			stack = append(stack, DataAndHeader{Type: vars[name].Type, Data: data})
+			mem_offset := vars[name].mem_offset
+			if bytecode[instruction_ptr+1].Opcode == FieldAccess {
+				instruction_ptr++
+				c := memory[vars[type_].mem_offset].(Class)
+				field_info := c.fieldsInfo[bytecode[instruction_ptr].Operands[0].(string)]
+				mem_offset += field_info.mem_offset
+				type_ = field_info.Type
+			}
+			stack = append(stack, TypeSafeValue{Type: type_, Data: memory[mem_offset]})
 		case Assign:
 			name := instruction.Operands[0].(string)
 			data := stack_pop()
@@ -449,27 +504,27 @@ func main() {
 		case OPCODE_ADD:
 			right := stack_pop()
 			left := stack_pop()
-			stack = append(stack, DataAndHeader{Type: "int", Data: left.Data.(int) + right.Data.(int)})
+			stack = append(stack, TypeSafeValue{Type: "int", Data: left.Data.(int) + right.Data.(int)})
 		case OPCODE_SUB:
 			right := stack_pop()
 			left := stack_pop()
 			if left.Type != "int" || right.Type != "int" {
 				panic("sub on non-int")
 			}
-			stack = append(stack, DataAndHeader{Type: "int", Data: left.Data.(int) - right.Data.(int)})
+			stack = append(stack, TypeSafeValue{Type: "int", Data: left.Data.(int) - right.Data.(int)})
 		case OPCODE_MUL:
 			right := stack_pop()
 			left := stack_pop()
-			stack = append(stack, DataAndHeader{Type: "int", Data: left.Data.(int) * right.Data.(int)})
+			stack = append(stack, TypeSafeValue{Type: "int", Data: left.Data.(int) * right.Data.(int)})
 		case OPCODE_DIV:
 			right := stack_pop()
 			left := stack_pop()
-			stack = append(stack, DataAndHeader{Type: "int", Data: left.Data.(int) / right.Data.(int)})
+			stack = append(stack, TypeSafeValue{Type: "int", Data: left.Data.(int) / right.Data.(int)})
 		case LoadLocal:
 			offset := instruction.Operands[0].(int)
 			type_ := instruction.Operands[1].(string)
 			var_stack_index := frames[len(frames)-1].function_locals_start_index + offset
-			stack = append(stack, DataAndHeader{Type: type_, Data: stack[var_stack_index].Data})
+			stack = append(stack, TypeSafeValue{Type: type_, Data: stack[var_stack_index].Data})
 		case SetLocal:
 			offset := instruction.Operands[0].(int)
 			type_ := instruction.Operands[1].(string)
@@ -480,19 +535,7 @@ func main() {
 			}
 			stack[var_stack_index].Data = stack_pop().Data
 		case Push:
-			d := instruction.Operands[0]
-			type_ := ""
-			switch d.(type) {
-			case int:
-				type_ = "int"
-			case float64:
-				type_ = "int"
-			case string:
-				type_ = "string"
-			default:
-				panic(fmt.Sprintf("unhandled type %T", d))
-			}
-			stack = append(stack, DataAndHeader{Type: type_, Data: d})
+			stack = append(stack, instruction.Operands[0].(TypeSafeValue))
 		case Invoke_function_on_stack_top:
 			arg_count := instruction.Operands[0].(int)
 			// println(arg_count, "arg_count")
@@ -545,9 +588,9 @@ func main() {
 				panic("sub on non-int")
 			}
 			if left.Data.(int) > right.Data.(int) {
-				stack = append(stack, DataAndHeader{Type: "int", Data: 1})
+				stack = append(stack, TypeSafeValue{Type: "int", Data: 1})
 			} else {
-				stack = append(stack, DataAndHeader{Type: "int", Data: 0})
+				stack = append(stack, TypeSafeValue{Type: "int", Data: 0})
 			}
 		case OPCODE_LT:
 			right := stack_pop()
@@ -556,9 +599,9 @@ func main() {
 				panic("sub on non-int")
 			}
 			if left.Data.(int) < right.Data.(int) {
-				stack = append(stack, DataAndHeader{Type: "int", Data: 1})
+				stack = append(stack, TypeSafeValue{Type: "int", Data: 1})
 			} else {
-				stack = append(stack, DataAndHeader{Type: "int", Data: 0})
+				stack = append(stack, TypeSafeValue{Type: "int", Data: 0})
 			}
 		case OPCODE_EQ:
 			right := stack_pop()
@@ -567,9 +610,9 @@ func main() {
 				panic("sub on non-int")
 			}
 			if left.Data.(int) == right.Data.(int) {
-				stack = append(stack, DataAndHeader{Type: "int", Data: 1})
+				stack = append(stack, TypeSafeValue{Type: "int", Data: 1})
 			} else {
-				stack = append(stack, DataAndHeader{Type: "int", Data: 0})
+				stack = append(stack, TypeSafeValue{Type: "int", Data: 0})
 			}
 		default:
 			panic(fmt.Sprintf("unhandled " + instruction.String()))
@@ -578,7 +621,7 @@ func main() {
 	}
 }
 
-func stack_pop() DataAndHeader {
+func stack_pop() TypeSafeValue {
 	v := stack[len(stack)-1]
 	stack = stack[:len(stack)-1]
 	return v
