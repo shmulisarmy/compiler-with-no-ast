@@ -82,7 +82,7 @@ func (t *Tokenizer) NextToken() Token {
 			c := t.currentChar
 			t.advance()
 			if t.currentChar == '=' {
-				token := Token{Type: TOKEN_OPERATOR, Value: string([]rune{rune(c), rune(t.currentChar)})}
+				token := Token{Type: TOKEN_OPERATOR, Value: string([]rune{rune(c), rune('=')})}
 				t.advance()
 				return token
 			}

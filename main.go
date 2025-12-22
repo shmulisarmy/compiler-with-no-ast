@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"no-ast/tokenizer"
 	"no-ast/utils/assert"
-	"no-ast/utils/displayStruct"
 	"os"
 	"strconv"
 )
@@ -77,9 +76,10 @@ func (this Instruction) String() string {
 	case LoadLocal:
 		res += "LOAD_LOCAL"
 	case OPCODE_GT:
-		res += "LOAD_LOCAL"
+		res += "GT"
 	case OPCODE_LT:
-		res += "LOAD_LOCAL"
+		res += "LT"
+
 	default:
 		panic(fmt.Sprintf("Unknown opcode: %d", this.Opcode))
 	}
@@ -109,7 +109,7 @@ func (p *Parser) parse_wrapped_term() []Instruction {
 	if !was_ident {
 		return exp_byte_code
 	}
-	fmt.Print(p.cur_token().Value, "p.tokens[p.index].Value")
+	// fmt.Print(p.cur_token().Value, "p.tokens[p.index].Value")
 	for p.in_range() {
 		state_changed := false
 		if p.tokens[p.index].Value == "(" {
@@ -164,6 +164,7 @@ func (p *Parser) parse_term() []Instruction {
 	}
 
 }
+
 func (p *Parser) parse_expression() []Instruction {
 	instructions := p.parse_wrapped_term()
 	for p.in_range() && p.tokens[p.index].Type == tokenizer.TOKEN_OPERATOR {
@@ -178,8 +179,11 @@ func (p *Parser) parse_expression() []Instruction {
 			operation_byte_code = Instruction{Opcode: OPCODE_MUL}
 		case "==":
 			operation_byte_code = Instruction{Opcode: OPCODE_EQ}
+		case "/":
+			operation_byte_code = Instruction{Opcode: OPCODE_DIV}
 		case ">":
 			operation_byte_code = Instruction{Opcode: OPCODE_GT}
+
 		case "<":
 			operation_byte_code = Instruction{Opcode: OPCODE_LT}
 		default:
@@ -200,7 +204,11 @@ func (p *Parser) parse_statement(previous_instruction_amount int) []Instruction 
 		return append(instructions, Instruction{Opcode: Return, Operands: []any{}})
 	}
 	if t.Value == "if" {
-		instructions = append(instructions, p.parse_expression()...)
+		e_instructions := p.parse_expression()
+		for _, e_instruction := range e_instructions {
+			fmt.Println("e_instruction", e_instruction)
+		}
+		instructions = append(instructions, e_instructions...)
 		instructions = append(instructions, Instruction{Opcode: JumpIfZero, Operands: []any{}})
 		conditional_jump_instruction_index := len(instructions) - 1
 		p.expect_token("{")
@@ -208,7 +216,8 @@ func (p *Parser) parse_statement(previous_instruction_amount int) []Instruction 
 			instructions = append(instructions, p.parse_statement(previous_instruction_amount+len(instructions))...)
 		}
 		p.expect_token("}")
-		instructions[conditional_jump_instruction_index].Operands = append(instructions[conditional_jump_instruction_index].Operands, previous_instruction_amount+len(instructions))
+		assert.Assert(instructions[conditional_jump_instruction_index].Opcode == JumpIfZero)
+		instructions[conditional_jump_instruction_index] = Instruction{Opcode: JumpIfZero, Operands: []any{previous_instruction_amount + len(instructions)}}
 		return instructions
 	}
 	if t.Value == "while" {
@@ -223,7 +232,8 @@ func (p *Parser) parse_statement(previous_instruction_amount int) []Instruction 
 		p.expect_token("}")
 		instructions = append(instructions, Instruction{Opcode: Push, Operands: []any{0}})
 		instructions = append(instructions, Instruction{Opcode: JumpIfZero, Operands: []any{previous_instruction_amount + start_index}})
-		instructions[conditional_jump_instruction_index].Operands = append(instructions[conditional_jump_instruction_index].Operands, previous_instruction_amount+len(instructions))
+		assert.Assert(instructions[conditional_jump_instruction_index].Opcode == JumpIfZero)
+		instructions[conditional_jump_instruction_index] = Instruction{Opcode: JumpIfZero, Operands: []any{previous_instruction_amount + len(instructions)}}
 		return instructions
 	}
 	if p.in_range() && p.cur_token().Value == "=" {
@@ -274,12 +284,11 @@ func print_one(args []any) {
 }
 
 var vars = map[string]VarInfo{
-	"x":           VarInfo{Name: "x", Type: "int", mem_offset: 0},
-	"y":           VarInfo{Name: "y", Type: "int", mem_offset: 1},
-	"print_all":   VarInfo{Name: "print_all", Type: "builtin-function", mem_offset: 2},
-	"print_one":   VarInfo{Name: "print_one", Type: "builtin-function", mem_offset: 3},
-	"print_added": VarInfo{Name: "print_added", Type: "function", mem_offset: 4},
-	"done":        VarInfo{Name: "done", Type: "builtin-function", mem_offset: 5},
+	"x":         VarInfo{Name: "x", Type: "int", mem_offset: 0},
+	"y":         VarInfo{Name: "y", Type: "int", mem_offset: 1},
+	"print_all": VarInfo{Name: "print_all", Type: "builtin-function", mem_offset: 2},
+	"print_one": VarInfo{Name: "print_one", Type: "builtin-function", mem_offset: 3},
+	"done":      VarInfo{Name: "done", Type: "builtin-function", mem_offset: 4},
 }
 
 type StackFrame struct {
@@ -300,15 +309,39 @@ var bytecode []Instruction
 var current_parsing_function = Function{}
 var in_function = false
 
-func init() {
+func build_program() {
 
-	source := `y = 1+90-7 
+	source := `
+				print_added(2) 
+				print_added(3) 
+				print_added(4) 
+				print_added(5) 
+
+
+	x = 0
+	while x < 10 {
+		x = x + 1
+		print_one(4+x*10)
+	}
+	x = 1
+	if x{
+		print_one(1) 
+		print_one(2) 
+		print_one(3) 
+		print_one(4) 
+		print_one(5) 
+		}
+				print_added(x) 
+				y = 1+90-7 
 				x=y+2 
 				print_one(y)
 				print_one(x)
-				print_one(y) 
-				print_added(x) 
+				
+				print_one(x) 
+				
+				
 				done()
+				defers(x)
 	`
 	bytecode = block_instructions(source, 0)
 	memory[vars["x"].mem_offset] = 0
@@ -320,22 +353,17 @@ func init() {
 		os.Exit(0)
 	}
 	function_header := Function{Name: "print_added", param_types: []string{"int"}, return_type: "void", instruction_start_index: len(bytecode), local_vars: map[string]VarInfo{
-		"x": VarInfo{Name: "x", Type: "int", mem_offset: 0},
+		"num": VarInfo{Name: "num", Type: "int", mem_offset: 0},
 	}}
-	makeFunction(function_header, "print_added", `print_one(x-1) 
-												if x>20{ print_added(x-1)}
-												x=0
-												while x<10{x=x+1 
-													print_one(x) 
-													if x == 5{x=x+2}
-												} 
+	makeFunction(function_header, "print_added", `
+												print_one(num+num)
 												return`)
 
 	function_header = Function{Name: "defers", param_types: []string{"int"}, return_type: "void", instruction_start_index: len(bytecode), local_vars: map[string]VarInfo{
 		"x": VarInfo{Name: "x", Type: "int", mem_offset: 0},
 	}}
 	makeFunction(function_header, "defers", `
-					print_one(x)
+					print_one(x+1001)
 				`)
 
 }
@@ -343,9 +371,12 @@ func init() {
 func makeFunction(function_header Function, function_name string, block_code string) {
 	current_parsing_function = function_header
 	in_function = true
-	memory[vars[function_name].mem_offset] = current_parsing_function
-	print_added_instructions := block_instructions(block_code, len(bytecode))
-	for _, instruction := range print_added_instructions {
+	vars[function_name] = VarInfo{Name: function_name, Type: "function", mem_offset: len(vars)}
+	memory[vars[function_name].mem_offset] = function_header
+	body_instructions := block_instructions(block_code, len(bytecode))
+	fmt.Println(function_name, "instructions")
+	for _, instruction := range body_instructions {
+		fmt.Println("\t", instruction)
 		bytecode = append(bytecode, instruction)
 	}
 	current_parsing_function = Function{}
@@ -380,14 +411,31 @@ func (p *Parser) parse_block(previous_instruction_amount int) []Instruction {
 	return bytecode
 }
 
+func testing() {
+	source := `42 > a`
+	p := Parser{tokens: tokenizer.Tokenize(source), index: 0}
+	fmt.Println("tokens")
+	for _, tok := range p.tokens {
+		fmt.Println("\t", tok)
+	}
+	bytecode := p.parse_expression()
+	for _, instruction := range bytecode {
+		fmt.Println(instruction)
+	}
+}
+
 func main() {
-	// source := "x = 42 + 3.14 * (y - 1);"
+	// testing()
+
+	// os.Exit(0)
+	build_program()
 	instruction_ptr := 0
 	for instruction_ptr < len(bytecode) {
 		instruction := bytecode[instruction_ptr]
-
-		displayStruct.Print(stack)
-		displayStruct.Print(instruction)
+		// for stack_thing := range stack {
+		// 	displayStruct.Print(stack_thing)
+		// }
+		// displayStruct.Print(instruction)
 		switch instruction.Opcode {
 		case LoadVar:
 			name := instruction.Operands[0].(string)
@@ -466,7 +514,7 @@ func main() {
 						panic(fmt.Sprintf("expected %s, got %s for arg %d", function.Data.(Function).param_types[i], stack[len(stack)-arg_count+i].Type, i))
 					}
 				}
-				frames = append(frames, StackFrame{return_address: len(bytecode), function_locals_start_index: len(stack) - arg_count})
+				frames = append(frames, StackFrame{return_address: instruction_ptr + 1, function_locals_start_index: len(stack) - arg_count})
 				instruction_ptr = function.Data.(Function).instruction_start_index
 				continue
 			} else {
