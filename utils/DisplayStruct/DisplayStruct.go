@@ -27,7 +27,7 @@ func DisplayStruct(v any) string {
 }
 
 func Print(v any) {
-	if !slices.Contains(os.Args, "no-log") {
+	if !slices.Contains(os.Args, "log") {
 		fmt.Println(DisplayStruct(v))
 	}
 }

@@ -31,7 +31,24 @@ const (
 	JumpIfZero
 	SetLocal
 	FieldAccess
+	//
+	AccessMemory_andSkipBlanks //post program compile
 )
+
+func get_type_size(t string) int {
+	switch t {
+	case "int":
+		return 4
+	case "string":
+		return 4
+	case "builtin-function":
+		return 4
+	case "function":
+		return 4
+	default:
+		panic(fmt.Sprintf("unknown type %s", t))
+	}
+}
 
 type VarInfo struct {
 	Name       string
@@ -83,7 +100,9 @@ func (this Instruction) String() string {
 		res += "LT"
 	case FieldAccess:
 		res += "FIELD_ACCESS"
+	case AccessMemory_andSkipBlanks:
 
+		res += "ACCESS_MEMORY_AND_SKIP_BLANKS"
 	default:
 		panic(fmt.Sprintf("Unknown opcode: %d", this.Opcode))
 	}
@@ -356,13 +375,17 @@ var in_function = false
 func build_program() {
 
 	source := `
-				print_added(person.age) 
-				print_added(person.highest_bench) 
-				print_one(person.address.number) 
-				print_added(3) 
-				print_added(4) 
-				print_added(5) 
-
+	x = 0
+	while x < 3{
+		x = x + 1
+		print_added(person.age) 
+		print_added(person.highest_bench) 
+		print_one(person.address.number) 
+		print_added(3) 
+		print_added(4) 
+		print_added(5) 
+		
+		} 
 
 	x = 0
 	while x < 10 {
@@ -490,6 +513,7 @@ func main() {
 	build_program()
 	instruction_ptr := 0
 	for instruction_ptr < len(bytecode) {
+	ProcessInstruction:
 		instruction := bytecode[instruction_ptr]
 		// for stack_thing := range stack {
 		// 	displayStruct.Print(stack_thing)
@@ -497,22 +521,15 @@ func main() {
 		// displayStruct.Print(instruction)
 		switch instruction.Opcode {
 		case LoadVar:
-			name := instruction.Operands[0].(string)
-			type_ := vars[name].Type
-			// fmt.Println(name, "is name")
-			mem_offset := vars[name].mem_offset
-			for bytecode[instruction_ptr+1].Opcode == FieldAccess {
-				instruction_ptr++
-				c := memory[vars[type_].mem_offset].(Class)
-				field_info := c.fieldsInfo[bytecode[instruction_ptr].Operands[0].(string)]
-				mem_offset += field_info.mem_offset
-				type_ = field_info.Type
-			}
-			stack = append(stack, TypeSafeValue{Type: type_, Data: memory[mem_offset]})
+			type_, mem_offset, lookaheadAmount := compile_memory_access(instruction_ptr)
+			bytecode[instruction_ptr] = Instruction{Opcode: AccessMemory_andSkipBlanks, Operands: []any{mem_offset, type_, get_type_size(type_), instruction_ptr + lookaheadAmount}}
+			instruction = bytecode[instruction_ptr]
+			goto ProcessInstruction
 		case Assign:
 			name := instruction.Operands[0].(string)
 			data := stack_pop()
-			memory[vars[name].mem_offset] = data.Data
+			mem_offset := vars[name].mem_offset
+			memory[mem_offset] = data.Data
 		case OPCODE_ADD:
 			right := stack_pop()
 			left := stack_pop()
@@ -626,11 +643,47 @@ func main() {
 			} else {
 				stack = append(stack, TypeSafeValue{Type: "int", Data: 0})
 			}
+		case AccessMemory_andSkipBlanks:
+			offset := instruction.Operands[0].(int)
+			type_ := instruction.Operands[1].(string)
+			// type_size := instruction.Operands[2].(int)
+			stack = append(stack, TypeSafeValue{Type: type_, Data: memory[offset]})
+			{
+				i := instruction_ptr + 1
+				for i < instruction.Operands[3].(int) {
+					if bytecode[i].Opcode != FieldAccess {
+
+						panic(fmt.Sprintf("not a FieldAccess but rather is %v", bytecode[i]))
+					}
+					i++
+				}
+			}
+			instruction_ptr = instruction.Operands[3].(int)
+			continue
 		default:
 			panic(fmt.Sprintf("unhandled " + instruction.String()))
 		}
 		instruction_ptr++
 	}
+}
+
+func compile_memory_access(instruction_ptr int) (string, int, int) {
+	var instruction Instruction = bytecode[instruction_ptr]
+	assert.Assert(instruction.Opcode == LoadVar)
+	name := instruction.Operands[0].(string)
+	type_ := vars[name].Type
+	mem_offset := vars[name].mem_offset
+	//
+	lookaheadAmount := 1
+	for bytecode[instruction_ptr+lookaheadAmount].Opcode == FieldAccess {
+		println("lookaheadAmount", lookaheadAmount)
+		c := memory[vars[type_].mem_offset].(Class)
+		field_info := c.fieldsInfo[bytecode[instruction_ptr+lookaheadAmount].Operands[0].(string)]
+		mem_offset += field_info.mem_offset
+		type_ = field_info.Type
+		lookaheadAmount++
+	}
+	return type_, mem_offset, lookaheadAmount
 }
 
 func stack_pop() TypeSafeValue {
